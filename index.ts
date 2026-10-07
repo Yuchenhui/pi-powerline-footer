@@ -25,7 +25,7 @@ import { matchHistoryEntries, readGlobalShellHistory, readProjectHistory, append
 import type { BashModeSettings } from "./bash-mode/types.ts";
 import { getPreset, PRESETS } from "./presets.ts";
 import { getAgentPath } from "./paths.ts";
-import { collectHiddenExtensionStatusKeys, getNotificationExtensionStatuses, mergeSegmentOptions, mergeSegmentsWithCustomItems, nextPowerlineSettingWithOptions, nextPowerlineSettingWithPreset, parsePowerlineConfig, wrapNotificationExtensionStatus } from "./powerline-config.ts";
+import { collectHiddenExtensionStatusKeys, formatBackgroundTasksFooterLine, getNotificationExtensionStatuses, mergeSegmentOptions, mergeSegmentsWithCustomItems, nextPowerlineSettingWithOptions, nextPowerlineSettingWithPreset, parsePowerlineConfig, wrapNotificationExtensionStatus } from "./powerline-config.ts";
 import { getSeparator } from "./separators.ts";
 import { renderSegment } from "./segments.ts";
 import { resolveThinkingLevelSelection } from "./thinking-level.ts";
@@ -2856,8 +2856,13 @@ export default function powerlineFooter(pi: ExtensionAPI) {
     const gitStatus = showGit
       ? getGitStatus(gitBranch, gitOptions?.polling, ctx.cwd)
       : { branch: null, staged: 0, unstaged: 0, untracked: 0 };
-    const extensionStatuses = footerDataRef?.getExtensionStatuses() ?? new Map();
-    const customItemsById = new Map(config.customItems.map((item) => [item.id, item]));
+    const providerStatuses = footerDataRef?.getExtensionStatuses() ?? new Map();
+    // Native background tasks belong only on the terminal's final footer row.
+    const extensionStatuses = new Map(providerStatuses);
+    if (ctx.mode === "tui") extensionStatuses.delete("background-tasks");
+    const customItemsById = new Map(config.customItems
+      .filter((item) => ctx.mode !== "tui" || item.statusKey !== "background-tasks")
+      .map((item) => [item.id, item]));
     const hiddenExtensionStatusKeys = collectHiddenExtensionStatusKeys(config.customItems);
 
     // Check if using OAuth subscription
@@ -2967,6 +2972,8 @@ export default function powerlineFooter(pi: ExtensionAPI) {
     const statuses = footerDataRef.getExtensionStatuses();
     if (!statuses || statuses.size === 0) return [];
     const hiddenExtensionStatusKeys = collectHiddenExtensionStatusKeys(config.customItems);
+
+    if (currentCtx.mode === "tui") hiddenExtensionStatusKeys.add("background-tasks");
 
     const notifications: string[] = [];
     for (const value of getNotificationExtensionStatuses(statuses, hiddenExtensionStatusKeys)) {
@@ -3486,7 +3493,14 @@ export default function powerlineFooter(pi: ExtensionAPI) {
           requestStatusRender();
         },
         render(width: number): string[] {
-          return renderPowerlineSecondaryLines(width, theme);
+          const lines = renderPowerlineSecondaryLines(width, theme);
+          if (ctx.mode === "tui") {
+            const backgroundTasksLine = formatBackgroundTasksFooterLine(
+              footerData.getExtensionStatuses().get("background-tasks"), width,
+            );
+            if (backgroundTasksLine !== null) lines.push(backgroundTasksLine);
+          }
+          return lines;
         },
       };
     });

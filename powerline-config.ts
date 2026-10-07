@@ -433,6 +433,15 @@ export function collectHiddenExtensionStatusKeys(customItems: readonly CustomSta
   return hidden;
 }
 
+export function formatBackgroundTasksFooterLine(value: string | undefined, width: number): string | null {
+  if (!value || !Number.isFinite(width) || width < 1) return null;
+
+  const line = value.replace(/[\r\n]+/g, " ");
+  if (!stripTerminalSequences(line).trim() || visibleWidth(line) <= 0) return null;
+
+  return truncateToWidth(line, Math.floor(width), "…");
+}
+
 export function isNotificationExtensionStatus(value: string): boolean {
   return stripTerminalSequences(value).trimStart().startsWith("[");
 }
