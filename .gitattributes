@@ -1,0 +1,2 @@
+# Preserve byte equality of the shared privacy helper on Windows checkouts.
+*.ts text eol=lf
