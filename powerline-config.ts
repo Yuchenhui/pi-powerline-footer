@@ -1,4 +1,4 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { normalizeCostCurrency } from "./currency-rates.ts";
 import { BUILTIN_STATUS_LINE_SEGMENT_IDS } from "./types.ts";
 import type { ColorValue, CustomItemPosition, CustomStatusItem, PowerlinePlacement, PresetDef, StatusLineLayout, StatusLinePreset, StatusLineSegmentId, StatusLineSegmentOptions, StatusLineSeparatorStyle } from "./types.ts";
@@ -434,7 +434,7 @@ export function collectHiddenExtensionStatusKeys(customItems: readonly CustomSta
 }
 
 export function isNotificationExtensionStatus(value: string): boolean {
-  return value.trimStart().startsWith("[");
+  return stripTerminalSequences(value).trimStart().startsWith("[");
 }
 
 export function getNotificationExtensionStatuses(
@@ -449,6 +449,22 @@ export function getNotificationExtensionStatuses(
     notifications.push(value);
   }
   return notifications;
+}
+
+export function wrapNotificationExtensionStatus(value: string, width: number): string[] {
+  if (!Number.isFinite(width) || width < 1) return [];
+
+  const columns = Math.floor(width);
+  const prefix = columns > 1 ? " " : "";
+  const contentWidth = columns - prefix.length;
+  return wrapTextWithAnsi(value, contentWidth).map((line) => {
+    // A grapheme wider than the available content columns cannot be preserved.
+    // Pi's wrapper may emit it anyway; clip only that overflow, without ellipsis.
+    const content = visibleWidth(line) > contentWidth
+      ? truncateToWidth(line, contentWidth, "")
+      : line;
+    return prefix + content;
+  });
 }
 
 export function normalizeExtensionStatusValue(value: string, preserveAnsi = false): string | null {

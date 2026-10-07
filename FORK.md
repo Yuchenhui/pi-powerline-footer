@@ -27,14 +27,32 @@ migration does not restore it.
 The intended Pi installation source is
 `git:github.com/Yuchenhui/pi-powerline-footer@custom`. The parent performs the
 actual installation; this migration does not deploy or change live Pi settings.
-Updates deliberately merge upstream into `custom` and review the resulting
-changes. Future footer code changes belong in this repository, not in
-`npm/node_modules` or the old `pc-tweaks` whole-file overlays.
+In Pi 1.0.4, the explicit source
+`git:github.com/Yuchenhui/pi-powerline-footer@custom` is pinned; deliberately
+reinstall after reviewed commits are pushed. Upstream merges into `custom` are
+manual and reviewed, not autonomous. Future footer code changes belong in this
+repository, not in `npm/node_modules` or the old `pc-tweaks` whole-file overlays.
 
 External loop-watch, You-should-know, smart-footer, and their shared canonical
 privacy helper remain in `pc-tweaks` and were not imported here. The root
 `jev-privacy.ts` above is the existing footer-local snapshot, not a transfer of
 ownership of that external canonical helper.
+
+## Notification source repair
+
+Notification classification now ignores terminal escape sequences without
+changing displayed values or promoted-key suppression. Above-editor notification
+rows use Pi's ANSI-aware wrapping instead of dropping long values, retaining
+styles and explicit newlines with one-space indentation (omitted at width 1).
+Nonpositive/sub-column and nonfinite widths render no rows. Graphemes wider than
+the available content columns are clipped defensively; a two-column glyph cannot
+be preserved in one content column. Wrapping follows Pi's word-wrap whitespace
+semantics. No layout defaults, theme, routing, or migrated overflow logic changed.
+
+Bounded cases were added to `tests/custom-items.test.ts` but were **not run**.
+Verification of this repair is limited to static source/import review and
+`git diff --check`; runtime/load and LSP checks remain with the parent, as do
+publishing, reinstalling the pinned source, and live settings changes.
 
 ## Verification boundary
 

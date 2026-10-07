@@ -25,7 +25,7 @@ import { matchHistoryEntries, readGlobalShellHistory, readProjectHistory, append
 import type { BashModeSettings } from "./bash-mode/types.ts";
 import { getPreset, PRESETS } from "./presets.ts";
 import { getAgentPath } from "./paths.ts";
-import { collectHiddenExtensionStatusKeys, getNotificationExtensionStatuses, mergeSegmentOptions, mergeSegmentsWithCustomItems, nextPowerlineSettingWithOptions, nextPowerlineSettingWithPreset, parsePowerlineConfig } from "./powerline-config.ts";
+import { collectHiddenExtensionStatusKeys, getNotificationExtensionStatuses, mergeSegmentOptions, mergeSegmentsWithCustomItems, nextPowerlineSettingWithOptions, nextPowerlineSettingWithPreset, parsePowerlineConfig, wrapNotificationExtensionStatus } from "./powerline-config.ts";
 import { getSeparator } from "./separators.ts";
 import { renderSegment } from "./segments.ts";
 import { resolveThinkingLevelSelection } from "./thinking-level.ts";
@@ -2970,10 +2970,7 @@ export default function powerlineFooter(pi: ExtensionAPI) {
 
     const notifications: string[] = [];
     for (const value of getNotificationExtensionStatuses(statuses, hiddenExtensionStatusKeys)) {
-      const lineContent = ` ${value}`;
-      if (visibleWidth(lineContent) <= width) {
-        notifications.push(lineContent);
-      }
+      notifications.push(...wrapNotificationExtensionStatus(value, width));
     }
 
     return notifications;

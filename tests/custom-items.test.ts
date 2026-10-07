@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { collectHiddenExtensionStatusKeys, getNotificationExtensionStatuses, normalizeExtensionStatusValue, parsePowerlineConfig, mergeSegmentOptions, mergeSegmentsWithCustomItems, nextPowerlineSettingWithOptions, nextPowerlineSettingWithPreset, normalizeCompactExtensionStatus } from "../powerline-config.ts";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { collectHiddenExtensionStatusKeys, getNotificationExtensionStatuses, normalizeExtensionStatusValue, parsePowerlineConfig, mergeSegmentOptions, mergeSegmentsWithCustomItems, nextPowerlineSettingWithOptions, nextPowerlineSettingWithPreset, normalizeCompactExtensionStatus, isNotificationExtensionStatus, wrapNotificationExtensionStatus } from "../powerline-config.ts";
 import { getSeparator } from "../separators.ts";
 import { PRESETS } from "../presets.ts";
 
@@ -384,6 +385,56 @@ test("normalizeCompactExtensionStatus strips baked-in trailing separators", () =
 
 test("normalizeExtensionStatusValue keeps notification-style statuses renderable for custom items", () => {
   assert.equal(normalizeExtensionStatusValue("[review] queued · "), "[review] queued");
+});
+
+test("ANSI notifications retain their original display value and never become compact statuses", () => {
+  const notice = "\x1b[33m  [review] running\x1b[0m";
+  const promoted = "\x1b[32m[ci] queued\x1b[0m";
+  const plain = "\x1b[32mCI ok · \x1b[0m";
+  assert.equal(isNotificationExtensionStatus(notice), true);
+  assert.equal(isNotificationExtensionStatus(plain), false);
+  assert.equal(normalizeCompactExtensionStatus(notice), null);
+  assert.equal(normalizeCompactExtensionStatus(plain), "\x1b[32mCI ok");
+  assert.deepEqual(getNotificationExtensionStatuses(new Map([
+    ["review", notice], ["ci-status", promoted], ["plain", plain],
+  ]), new Set(["ci-status"])), [notice]);
+});
+
+test("long notification text wraps in order without a length cap", () => {
+  const value = `[notice]${"abcdefghij".repeat(12)}`;
+  const rows = wrapNotificationExtensionStatus(value, 16);
+  assert.ok(rows.length > 1);
+  assert.ok(rows.every((row) => row.startsWith(" ") && visibleWidth(row) <= 16));
+  assert.equal(rows.map((row) => stripTerminalSequences(row).slice(1)).join(""), value);
+  assert.deepEqual(wrapNotificationExtensionStatus("[notice] ready", 30), [" [notice] ready"]);
+  const sentence = "[notice] alpha beta gamma delta epsilon";
+  assert.equal(wrapNotificationExtensionStatus(sentence, 16)
+    .map((row) => stripTerminalSequences(row).slice(1)).join(" "), sentence);
+});
+
+test("notification wrapping preserves CJK, ANSI styles and explicit blank lines", () => {
+  const rows = wrapNotificationExtensionStatus("\x1b[33m[通知]中文abc中文\n\n下一行\x1b[0m", 9);
+  const contents = rows.map((row) => stripTerminalSequences(row).slice(1));
+  assert.ok(rows.every((row) => row.startsWith(" ") && visibleWidth(row) <= 9));
+  assert.equal(contents.join(""), "[通知]中文abc中文下一行");
+  assert.equal(contents.filter((line) => line === "").length, 1);
+  assert.ok(rows[0].includes("\x1b[33m"));
+  assert.ok(rows[rows.length - 1].includes("\x1b[33m"));
+  assert.ok(rows[rows.length - 1].includes("\x1b[0m"));
+  assert.deepEqual(wrapNotificationExtensionStatus("[n]\n\nend\n", 20), [" [n]", " ", " end", " "]);
+});
+
+test("notification wrapping defends zero and very narrow widths", () => {
+  for (const width of [0, -1, 0.5, NaN, Infinity]) {
+    assert.deepEqual(wrapNotificationExtensionStatus("[n]中文", width), []);
+  }
+  assert.equal(wrapNotificationExtensionStatus("[n]abc", 1).join(""), "[n]abc");
+  for (const width of [1, 2]) {
+    const rows = wrapNotificationExtensionStatus("\x1b[33m[n]中a\x1b[0m", width);
+    assert.ok(rows.every((row) => visibleWidth(row) <= width));
+    assert.ok(!rows.map(stripTerminalSequences).join("").includes("中"));
+    assert.equal(rows.map((row) => stripTerminalSequences(row).slice(width > 1 ? 1 : 0)).join(""), "[n]a");
+  }
 });
 
 test("getNotificationExtensionStatuses skips promoted hidden status keys", () => {
