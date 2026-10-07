@@ -68,7 +68,7 @@ import {
   setVibeWorkingMessageColor,
 } from "./working-vibes.ts";
 import { PowerlineQueueStore, currentQueueContext, formatQueueDeliveryText, parseCompactQueuedPrompt } from "./queue/store.ts";
-import { canWaitAsFollowUp } from "./auto-follow-up.ts";
+import { appendRouteDiagnostic, createAutoFollowUpRouter } from "./auto-follow-up.ts";
 import type { PowerlineQueueItem, QueueContext, QueueIntent, QueueSummary, QueueTarget } from "./queue/types.ts";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1115,7 +1115,7 @@ function computeResponsiveLayout(
   presetDef: ReturnType<typeof getPreset>,
   allSegmentIds: StatusLineSegmentId[],
   availableWidth: number
-): { topContent: string; secondaryContent: string } {
+): { topContent: string; secondaryLines: string[] } {
   const separatorStyle = config.separator ?? presetDef.separator;
   const separatorDef = getSeparator(separatorStyle);
   const sepWidth = visibleWidth(separatorDef.left) + 2; // separator + spaces around it
@@ -1130,7 +1130,7 @@ function computeResponsiveLayout(
   }
 
   if (renderedSegments.length === 0) {
-    return { topContent: "", secondaryContent: "" };
+    return { topContent: "", secondaryLines: [] };
   }
 
   // Calculate how many segments fit in top bar
@@ -1153,24 +1153,32 @@ function computeResponsiveLayout(
     }
   }
 
-  // Fit overflow segments into secondary row (same width constraint)
-  // Stop at first non-fitting segment to preserve ordering
-  let secondaryWidth = baseOverhead;
-  let secondarySegments: string[] = [];
+  // Fit overflow segments into secondary rows (same width constraint).
+  // Instead of dropping the first non-fitting segment, wrap onto an extra
+  // row (3rd line and beyond) so nothing silently disappears on narrow
+  // terminals. A single segment wider than the row is still emitted on its
+  // own row; the widget truncates it to width downstream.
+  const secondaryRows: string[][] = [];
+  let rowSegments: string[] = [];
+  let rowWidth = baseOverhead;
 
   for (const seg of overflowSegments) {
-    const neededWidth = seg.width + (secondarySegments.length > 0 ? sepWidth : 0);
-    if (secondaryWidth + neededWidth <= availableWidth) {
-      secondarySegments.push(seg.content);
-      secondaryWidth += neededWidth;
-    } else {
-      break;
+    const neededWidth = seg.width + (rowSegments.length > 0 ? sepWidth : 0);
+    if (rowSegments.length > 0 && rowWidth + neededWidth > availableWidth) {
+      secondaryRows.push(rowSegments);
+      rowSegments = [];
+      rowWidth = baseOverhead;
     }
+    rowSegments.push(seg.content);
+    rowWidth += neededWidth;
+  }
+  if (rowSegments.length > 0) {
+    secondaryRows.push(rowSegments);
   }
 
   return {
     topContent: buildContentFromParts(topSegments, separatorStyle),
-    secondaryContent: buildContentFromParts(secondarySegments, separatorStyle),
+    secondaryLines: secondaryRows.map((row) => buildContentFromParts(row, separatorStyle)),
   };
 }
 
@@ -1264,7 +1272,7 @@ export default function powerlineFooter(pi: ExtensionAPI) {
 
   // Cache for the top and secondary powerline widgets.
   let lastLayoutWidth = 0;
-  let lastLayoutResult: { topContent: string; secondaryContent: string } | null = null;
+  let lastLayoutResult: { topContent: string; secondaryLines: string[] } | null = null;
   let lastLayoutTimestamp = 0;
   let layoutDirty = true;
   let forceNextLayoutRecompute = false;
@@ -1834,6 +1842,7 @@ export default function powerlineFooter(pi: ExtensionAPI) {
     shellSession?.dispose();
     shellSession = null;
     sessionGeneration++;
+    autoFollowUpRouter.reset();
     sessionStartTime = Date.now();
     currentCtx = ctx;
     footerDataRef = null;
@@ -1900,6 +1909,7 @@ export default function powerlineFooter(pi: ExtensionAPI) {
     }
     stashedEditorText = null;
     sessionGeneration++;
+    autoFollowUpRouter.reset();
     dismissWelcome(ctx);
     restorePendingSend();
     statusRenderScheduler.cancel();
@@ -1998,66 +2008,15 @@ export default function powerlineFooter(pi: ExtensionAPI) {
     }
   });
 
-  // Serializes Jev routing so a quick second message cannot be queued before the first.
-  let autoFollowUpChain: Promise<unknown> = Promise.resolve();
-  // Messages still waiting on Jev have not reached Pi's queue, so Esc cannot restore them; this list does it in submission order.
-  const routingInputs: { text: string; signal: AbortSignal; restored: boolean }[] = [];
-
-  function restoreRoutingInputs(ctx: any, signal: AbortSignal): void {
-    const inputs = routingInputs.filter((input) => input.signal === signal && !input.restored);
-    if (inputs.length === 0) return;
-    for (const input of inputs) input.restored = true;
-    ctx.ui.setEditorText([...inputs.map((input) => input.text), ctx.ui.getEditorText()].filter((text) => text.trim()).join("\n\n"));
-  }
-
-  // Plain Enter while the agent works arrives as steering; move it to the follow-up queue when Jev is confident it can wait.
-  pi.on("input", async (event, ctx) => {
-    if (!config.autoFollowUp || event.source !== "interactive" || event.streamingBehavior !== "steer") return;
-    if (event.text.trimStart().startsWith("/")) return;
-    const apiKey = process.env.TYPESAFE_API_KEY?.trim();
-    if (!apiKey) {
-      ctx.ui.notify("Auto follow-up needs TYPESAFE_API_KEY; sent as steering", "warning");
-      return;
-    }
-
-    const state = { currentTask: lastUserPrompt, agentLatestText: getRecentAgentContext(ctx) ?? "", newMessage: event.text };
-    const generation = sessionGeneration;
-    // Only the run this message was typed into counts: the agent can also go idle by finishing normally, and that must still send.
-    const runSignal: AbortSignal | undefined = ctx.hasUI ? ctx.signal : undefined;
-    const routing = runSignal ? { text: event.text, signal: runSignal, restored: false } : undefined;
-    const onAbort = () => {
-      if (generation === sessionGeneration && routing) restoreRoutingInputs(ctx, routing.signal);
-    };
-    if (routing) {
-      routingInputs.push(routing);
-      routing.signal.addEventListener("abort", onAbort, { once: true });
-    }
-    const decision = autoFollowUpChain.then(() => canWaitAsFollowUp(state, apiKey));
-    autoFollowUpChain = decision.catch(() => {});
-    let followUp = false;
-    let failure: string | undefined;
-    try {
-      followUp = await decision;
-    } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
-    } finally {
-      if (routing) {
-        routing.signal.removeEventListener("abort", onAbort);
-        routingInputs.splice(routingInputs.indexOf(routing), 1);
-      }
-    }
-    // A session switch during the Jev call must not route this message into the new session.
-    if (generation !== sessionGeneration) return;
-    if (routing?.restored) return { action: "handled" };
-    if (failure !== undefined) {
-      ctx.ui.notify(`Auto follow-up unavailable (${failure}); sent as steering`, "warning");
-      return;
-    }
-    if (!followUp) return;
-
-    pi.sendUserMessage(event.images?.length ? [{ type: "text", text: event.text }, ...event.images] : event.text, { deliverAs: "followUp" });
-    return { action: "handled" };
+  // Route only plain text with an active run; attachments/sensitive input stay on Pi's native steering path.
+  const autoFollowUpRouter = createAutoFollowUpRouter({
+    enabled: () => config.autoFollowUp,
+    state: (text, ctx) => ({ currentTask: lastUserPrompt, agentLatestText: getRecentAgentContext(ctx) ?? "", newMessage: text }),
+    getKey: () => process.env.TYPESAFE_API_KEY,
+    diagnostic: appendRouteDiagnostic,
+    send: (event) => pi.sendUserMessage(event.text, { deliverAs: "followUp" }),
   });
+  pi.on("input", (event, ctx) => autoFollowUpRouter.handle(event, ctx));
 
   // Track streaming state (footer only shows status during streaming)
   // Also dismiss welcome when agent starts responding (handles `p "command"` case)
@@ -2950,7 +2909,7 @@ export default function powerlineFooter(pi: ExtensionAPI) {
    * Get cached responsive layout or compute fresh one.
    * The segment context scans session state, so keep it stable across render bursts.
    */
-  function getResponsiveLayout(width: number, theme: Theme): { topContent: string; secondaryContent: string } {
+  function getResponsiveLayout(width: number, theme: Theme): { topContent: string; secondaryLines: string[] } {
     const now = Date.now();
     const cacheTtl = isStreaming ? STREAMING_LAYOUT_CACHE_TTL_MS : LAYOUT_CACHE_TTL_MS;
 
@@ -2986,7 +2945,7 @@ export default function powerlineFooter(pi: ExtensionAPI) {
       if (!isStaleExtensionContextError(error)) throw error;
       currentCtx = null;
       lastLayoutWidth = width;
-      lastLayoutResult = { topContent: "", secondaryContent: "" };
+      lastLayoutResult = { topContent: "", secondaryLines: [] };
       lastLayoutTimestamp = now;
       layoutDirty = false;
       forceNextLayoutRecompute = false;
@@ -3031,7 +2990,9 @@ export default function powerlineFooter(pi: ExtensionAPI) {
     if (!currentCtx) return [];
 
     const layout = getResponsiveLayout(width, theme);
-    return layout.secondaryContent ? [layout.secondaryContent] : [];
+    // Extra overflow rows (3rd line and beyond); truncate defensively in case
+    // a single segment exceeds the row width.
+    return layout.secondaryLines.map((line) => truncateToWidth(line, width, "…"));
   }
 
   function renderPowerlineQueuePreviewLines(width: number, theme: Theme): string[] {
