@@ -11,8 +11,22 @@ export function canSendRouteState(state: FollowUpRouteState): boolean {
   return state.currentTask.length <= 4000 && state.newMessage.length <= 4000
     && !Object.values(state).some(containsSensitiveContent);
 }
+export interface RouteJudgment {
+  choice: "steer" | "follow_up";
+  confidence: number;
+  threshold: 0.8;
+  decisionReason: "model_steer" | "low_confidence_follow_up" | "follow_up_accepted";
+}
+/** Only validated, bounded judgment metadata; never retain the upstream answer object. */
+function routeJudgment(choice: unknown, confidence: unknown): RouteJudgment | undefined {
+  if ((choice !== "steer" && choice !== "follow_up") || !isUnitConfidence(confidence)) return undefined;
+  return { choice, confidence, threshold: 0.8, decisionReason: choice === "steer" ? "model_steer"
+    : confidence < 0.8 ? "low_confidence_follow_up" : "follow_up_accepted" };
+}
 /** Conservative fallback is steering. Never include upstream response bodies in errors/UI. */
-export async function canWaitAsFollowUp(state: FollowUpRouteState, apiKey: string, owner?: AbortSignal): Promise<boolean> {
+export async function canWaitAsFollowUp(
+  state: FollowUpRouteState, apiKey: string, owner?: AbortSignal, observe?: (judgment: RouteJudgment) => void,
+): Promise<boolean> {
   if (!canSendRouteState(state)) return false;
   return withJevDeadline(async signal => {
     const response = await fetch("https://api.typesafe.ai/v1/systemone", {
@@ -33,10 +47,13 @@ export async function canWaitAsFollowUp(state: FollowUpRouteState, apiKey: strin
     if (!response.ok) throw new Error(`JEV HTTP ${response.status}`);
     const body = await response.json(); const route = body?.answers?.route;
     if (!route || !["steer", "follow_up"].includes(route.choice) || !isUnitConfidence(route.confidence)) throw new Error("Unexpected JEV route answer");
+    if (!signal.aborted && !owner?.aborted) {
+      try { observe?.(routeJudgment(route.choice, route.confidence)!); } catch { /* Observers cannot affect routing. */ }
+    }
     return route.choice === "follow_up" && route.confidence >= 0.8;
   }, 1500, owner);
 }
-export interface RouteDiagnostic {
+export interface RouteDiagnostic extends Partial<RouteJudgment> {
   timestamp: string;
   id: string;
   phase: "input" | "result";
@@ -54,8 +71,33 @@ export function appendRouteDiagnostic(record: RouteDiagnostic): void {
     const root = process.env.PI_AGENT_DIR ?? join(homedir(), ".pi", "agent");
     const path = join(root, "auto-follow-up.log");
     if (existsSync(path) && statSync(path).size >= 1024 * 1024) renameSync(path, `${path}.1`);
-    const { timestamp, id, phase, busy, source, requested, outcome, reason, jevInvoked, elapsedMs } = record;
-    writeFileSync(path, `${JSON.stringify({ timestamp, id, phase, busy, source, requested, outcome, reason, jevInvoked, elapsedMs })}\n`, { flag: "a", mode: 0o600 });
+    const enumValue = (value: unknown, allowed: readonly string[]) =>
+      typeof value === "string" && allowed.includes(value) ? value : undefined;
+    const safeString = (value: unknown, pattern: RegExp) =>
+      typeof value === "string" && pattern.test(value) ? value : undefined;
+    const judgment = routeJudgment(record.choice, record.confidence);
+    // Require the complete, consistent tuple; unknown fields and arbitrary strings never reach JSON.
+    const metadata = judgment && record.threshold === 0.8 && record.decisionReason === judgment.decisionReason
+      ? judgment : undefined;
+    const safe = {
+      timestamp: safeString(record.timestamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+      id: safeString(record.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
+      phase: enumValue(record.phase, ["input", "result"]),
+      busy: typeof record.busy === "boolean" ? record.busy : undefined,
+      source: enumValue(record.source, ["interactive", "rpc", "extension"]),
+      requested: enumValue(record.requested, ["steer", "followUp", "idle"]),
+      outcome: enumValue(record.outcome, ["pending", "native", "steer", "follow_up", "handled"]),
+      reason: enumValue(record.reason, ["received", "disabled", "non_interactive", "not_steering", "slash_command",
+        "image_attachment", "no_active_run", "queue_limit", "sensitive_or_oversized", "missing_key",
+        "jev_not_follow_up", "request_timeout", "request_canceled", "malformed_response", "request_failed",
+        "session_changed", "run_canceled", "jev_follow_up"])
+        ?? safeString(record.reason, /^http_[1-5]\d{2}$/),
+      jevInvoked: typeof record.jevInvoked === "boolean" ? record.jevInvoked : undefined,
+      elapsedMs: typeof record.elapsedMs === "number" && Number.isFinite(record.elapsedMs) && record.elapsedMs >= 0
+        ? record.elapsedMs : undefined,
+      ...metadata,
+    };
+    writeFileSync(path, `${JSON.stringify(safe)}\n`, { flag: "a", mode: 0o600 });
   } catch { /* Diagnostics must never affect delivery. */ }
 }
 interface RouterDeps {
@@ -90,10 +132,11 @@ export function createAutoFollowUpRouter(deps: RouterDeps): AutoFollowUpRouter {
       const startedAt = Date.now();
       const id = randomUUID();
       let jevInvoked = false;
-      const diagnostic = (phase: RouteDiagnostic["phase"], outcome: RouteDiagnostic["outcome"], reason: string) => {
+      const diagnostic = (phase: RouteDiagnostic["phase"], outcome: RouteDiagnostic["outcome"], reason: string, judgment?: RouteJudgment) => {
         try {
           deps.diagnostic?.({ timestamp: new Date().toISOString(), id, phase, busy: event.streamingBehavior !== undefined,
-            source: event.source, requested: event.streamingBehavior ?? "idle", outcome, reason, jevInvoked, elapsedMs: Date.now() - startedAt });
+            source: event.source, requested: event.streamingBehavior ?? "idle", outcome, reason, jevInvoked, elapsedMs: Date.now() - startedAt,
+            ...judgment });
         } catch { /* Delivery does not depend on diagnostics. */ }
       };
       const native = (reason: string) => { diagnostic("result", "native", reason); return undefined; };
@@ -120,10 +163,19 @@ export function createAutoFollowUpRouter(deps: RouterDeps): AutoFollowUpRouter {
       sessionSignal.addEventListener("abort", onSessionAbort, { once: true });
       run.addEventListener("abort", onRunAbort, { once: true });
       if (run.aborted) onRunAbort();
+      let judgment: RouteJudgment | undefined;
+      let observing = true;
+      const observe = (value: RouteJudgment) => {
+        try {
+          if (observing && !requestOwner.signal.aborted && epoch === generation && !input.restored) {
+            judgment = routeJudgment(value.choice, value.confidence);
+          }
+        } catch { /* An injected observer value must not affect delivery. */ }
+      };
       const decision = chain.then(() => {
         if (requestOwner.signal.aborted || epoch !== generation) return false;
         jevInvoked = true;
-        return (deps.route ?? canWaitAsFollowUp)(state, key, requestOwner.signal);
+        return (deps.route ?? canWaitAsFollowUp)(state, key, requestOwner.signal, observe);
       });
       chain = decision.catch(() => {});
       let followUp = false;
@@ -132,6 +184,7 @@ export function createAutoFollowUpRouter(deps: RouterDeps): AutoFollowUpRouter {
         // Also bound time waiting in the serialized chain (not just the network operation).
         followUp = await withJevDeadline(() => decision, 1500, requestOwner.signal);
       } catch (error) {
+        judgment = undefined;
         const message = error instanceof Error ? error.message : "";
         const status = /^JEV HTTP (\d{3})$/.exec(message)?.[1];
         reason = message === "JEV request timed out" ? "request_timeout"
@@ -141,6 +194,7 @@ export function createAutoFollowUpRouter(deps: RouterDeps): AutoFollowUpRouter {
         requestOwner.abort();
         if (epoch === generation && !input.restored) ctx.ui.notify("Auto follow-up unavailable; sent as steering", "warning");
       } finally {
+        observing = false;
         run.removeEventListener("abort", onRunAbort);
         sessionSignal.removeEventListener("abort", onSessionAbort);
         const index = inputs.indexOf(input); if (index >= 0) inputs.splice(index, 1);
@@ -149,9 +203,9 @@ export function createAutoFollowUpRouter(deps: RouterDeps): AutoFollowUpRouter {
         diagnostic("result", "handled", epoch !== generation ? "session_changed" : "run_canceled");
         return { action: "handled" };
       }
-      if (!followUp) { diagnostic("result", "steer", reason); return; }
+      if (!followUp) { diagnostic("result", "steer", reason, judgment); return; }
       deps.send(event);
-      diagnostic("result", "follow_up", "jev_follow_up");
+      diagnostic("result", "follow_up", "jev_follow_up", judgment);
       return { action: "handled" };
     },
   };

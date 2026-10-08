@@ -310,6 +310,8 @@ Pi also needs `TYPESAFE_API_KEY` in its environment. Each message you send while
 
 A message leaves the steer path only when Jev is confident it can wait. Unsure answers, timeouts, and API errors keep it as steering and show a warning. `Alt+Enter`, slash commands, and prompts sent while the agent is idle never call Jev. The default is `false`.
 
+Auto follow-up diagnostics in the agent directory's `auto-follow-up.log` retain the existing `reason` and `outcome`. For a validated, timely Jev judgment, result records also include `choice` (`steer` or `follow_up`), finite `confidence` in `[0, 1]`, fixed `threshold: 0.8`, and `decisionReason`: `model_steer`, `low_confidence_follow_up`, or `follow_up_accepted`. Thus `jev_not_follow_up` can mean either an explicit steer choice or a follow-up choice below the threshold. These are classifier judgments, not delivery guarantees; bypasses, timeouts, malformed responses, and canceled/stale requests have no judgment metadata. Logging is allowlisted, best-effort, rotates at 1 MiB, and creates files with mode `0600`; it excludes prompt/reply text, raw answers, probability maps, keys, paths, and upstream error bodies. No extra Jev request is made.
+
 ## Editor Stash
 
 Use `Alt+S` / `Option+S` as a quick stash toggle while drafting. It keeps one active stash and clears the editor when stashing. Powerline listens for unambiguous Alt/Meta-S escape encodings by default. If your old terminal setup only emits the printable German sharp-S character for Option+S and you still want that to trigger stash, set `"stashSharpSShortcut": true` under `powerline`.
