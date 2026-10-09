@@ -1,6 +1,7 @@
 {
   "name": "pi-powerline-footer",
   "version": "0.19.1-yuchenhui.1",
+  "private": true,
   "description": "Powerline-style status bar extension for pi coding agent",
   "type": "module",
   "files": [
