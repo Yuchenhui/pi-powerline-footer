@@ -3498,7 +3498,7 @@ export default function powerlineFooter(pi: ExtensionAPI) {
             const backgroundTasksLine = formatBackgroundTasksFooterLine(
               footerData.getExtensionStatuses().get("background-tasks"), width,
             );
-            if (backgroundTasksLine !== null) lines.push(backgroundTasksLine);
+            if (backgroundTasksLine !== null) lines.push(theme.fg("muted", backgroundTasksLine));
           }
           return lines;
         },
