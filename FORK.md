@@ -36,6 +36,9 @@ changes belong in this repository, not in `npm/node_modules` or the old
 
 ### Own release policy
 
+Long-term fork maintenance is on `main`; releases retain immutable tags and
+exact-SHA installation pins rather than a floating `main` source.
+
 The first maintained release is `pi-powerline-footer@0.19.1-yuchenhui.1`, based
 exactly on pre-release fork commit `1623129abcea7d1ea7c260816395d6daf8b90a82`
 and upstream `v0.19.1` (`859dee671b633fb533b07ceba3e6c1ab1c43360a`).
