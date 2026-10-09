@@ -1,6 +1,6 @@
 {
   "name": "pi-powerline-footer",
-  "version": "0.19.1",
+  "version": "0.19.1-yuchenhui.1",
   "description": "Powerline-style status bar extension for pi coding agent",
   "type": "module",
   "files": [
@@ -23,7 +23,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nicobailon/pi-powerline-footer.git"
+    "url": "git+https://github.com/Yuchenhui/pi-powerline-footer.git"
+  },
+  "homepage": "https://github.com/Yuchenhui/pi-powerline-footer#readme",
+  "bugs": {
+    "url": "https://github.com/Yuchenhui/pi-powerline-footer/issues"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

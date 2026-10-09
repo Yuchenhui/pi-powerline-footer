@@ -1,9 +1,9 @@
 # Maintained Powerline fork
 
 This fork of `nicobailon/pi-powerline-footer` starts from upstream `v0.19.1`,
-commit `859dee671b633fb533b07ceba3e6c1ab1c43360a`, on the local `custom` branch.
-The upstream README, package manifest, license information, history, and existing
-tests are retained.
+commit `859dee671b633fb533b07ceba3e6c1ab1c43360a`. The initial migration used
+the local `custom` branch. The upstream README, package name, author attribution,
+license information, history, dependencies, and existing tests are retained.
 
 ## Migrated customizations
 
@@ -24,14 +24,33 @@ migration does not restore it.
 
 ## Ownership and updates
 
-The intended Pi installation source is
-`git:github.com/Yuchenhui/pi-powerline-footer@custom`. The parent performs the
-actual installation; this migration does not deploy or change live Pi settings.
-In Pi 1.0.4, the explicit source
-`git:github.com/Yuchenhui/pi-powerline-footer@custom` is pinned; deliberately
-reinstall after reviewed commits are pushed. Upstream merges into `custom` are
-manual and reviewed, not autonomous. Future footer code changes belong in this
-repository, not in `npm/node_modules` or the old `pc-tweaks` whole-file overlays.
+The historical migration installed
+`git:github.com/Yuchenhui/pi-powerline-footer@custom`; that branch-based source
+is no longer the maintained release installation advice. Install the reviewed
+release from `git:github.com/Yuchenhui/pi-powerline-footer@<full-release-commit-SHA>`
+(replace the placeholder with the exact published commit, not a branch or tag).
+The parent owns publication, Windows installation, and live Pi settings changes.
+Upstream integration is manual and reviewed, not autonomous. Future footer code
+changes belong in this repository, not in `npm/node_modules` or the old
+`pc-tweaks` whole-file overlays.
+
+### Own release policy
+
+The first maintained release is `pi-powerline-footer@0.19.1-yuchenhui.1`, based
+exactly on pre-release fork commit `1623129abcea7d1ea7c260816395d6daf8b90a82`
+and upstream `v0.19.1` (`859dee671b633fb533b07ceba3e6c1ab1c43360a`).
+Versions follow `<upstream-version>-yuchenhui.N`: own corrections increment `N`;
+a newly adopted upstream baseline starts again at `.1`. Each release uses an
+annotated tag (first: `v0.19.1-yuchenhui.1`) and a GitHub Release with a reviewed
+package artifact. There is no npm publishing, and the npm package name remains
+`pi-powerline-footer`.
+
+Installation is pinned to the exact reviewed release commit SHA. The initial
+rollback source is
+`git:github.com/Yuchenhui/pi-powerline-footer@1623129abcea7d1ea7c260816395d6daf8b90a82`.
+Later releases record their previous reviewed SHA for rollback. Packing, isolated
+offline loading, artifact review, tags, Releases, and installation are parent-owned;
+this metadata step does not perform them.
 
 External loop-watch, You-should-know, smart-footer, and their shared canonical
 privacy helper remain in `pc-tweaks` and were not imported here. The root
@@ -55,6 +74,16 @@ Verification of this repair is limited to static source/import review and
 publishing, reinstalling the pinned source, and live settings changes.
 
 ## Verification boundary
+
+The `0.19.1-yuchenhui.1` metadata step changes only this document, manifest
+version/repository/homepage/bugs metadata, and lockfile root/package versions.
+Its verification is limited to static manifest/lockfile comparison, an
+`npm pack --ignore-scripts --dry-run --json` content preview (not an artifact or
+load test), package-content inspection for private/runtime configuration, and
+`git diff --check`. No existing footer behavior is claimed tested. Existing
+upstream tests, regressions, builds, model/native-client calls, and runtime
+loading are not run by this metadata worker; isolated offline loading remains
+with the parent.
 
 Migration verification is limited to Git diff/whitespace inspection, byte hashes
 of the four copied files, and static relative import paths. No regressions,
